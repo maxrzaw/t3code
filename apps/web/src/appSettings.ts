@@ -7,6 +7,29 @@ import { useLocalStorage } from "./hooks/useLocalStorage";
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
+export const MAX_TERMINAL_FONT_FAMILY_LENGTH = 512;
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  '"SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
+export const APP_SERVICE_TIER_OPTIONS = [
+  {
+    value: "auto",
+    label: "Automatic",
+    description: "Use Codex defaults without forcing a service tier.",
+  },
+  {
+    value: "fast",
+    label: "Fast",
+    description: "Request the fast service tier when the model supports it.",
+  },
+  {
+    value: "flex",
+    label: "Flex",
+    description: "Request the flex service tier when the model supports it.",
+  },
+] as const;
+export type AppServiceTier = (typeof APP_SERVICE_TIER_OPTIONS)[number]["value"];
+const AppServiceTierSchema = Schema.Literals(["auto", "fast", "flex"]);
+const MODELS_WITH_FAST_SUPPORT = new Set(["gpt-5.4"]);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
 };
@@ -22,6 +45,12 @@ const AppSettingsSchema = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
+  terminalFontFamily: Schema.String.check(Schema.isMaxLength(MAX_TERMINAL_FONT_FAMILY_LENGTH)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  codexServiceTier: AppServiceTierSchema.pipe(
+    Schema.withConstructorDefault(() => Option.some("auto")),
+  ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
@@ -31,6 +60,31 @@ export interface AppModelOption {
   slug: string;
   name: string;
   isCustom: boolean;
+}
+
+export function resolveAppServiceTier(
+  serviceTier: AppServiceTier,
+): Exclude<AppServiceTier, "auto"> | null {
+  return serviceTier === "auto" ? null : serviceTier;
+}
+
+export function shouldShowFastTierIcon(
+  model: string | null | undefined,
+  serviceTier: AppServiceTier,
+): boolean {
+  const normalizedModel = normalizeModelSlug(model);
+  return (
+    resolveAppServiceTier(serviceTier) === "fast" &&
+    normalizedModel !== null &&
+    MODELS_WITH_FAST_SUPPORT.has(normalizedModel)
+  );
+}
+
+export function resolveTerminalFontFamily(fontFamily: string | null | undefined): string {
+  const trimmedFontFamily = fontFamily?.trim();
+  return trimmedFontFamily && trimmedFontFamily.length > 0
+    ? trimmedFontFamily
+    : DEFAULT_TERMINAL_FONT_FAMILY;
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
@@ -133,19 +187,43 @@ export function resolveAppModelSelection(
   );
 }
 
+export function getSlashModelOptions(
+  provider: ProviderKind,
+  customModels: readonly string[],
+  query: string,
+  selectedModel?: string | null,
+): AppModelOption[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const options = getAppModelOptions(provider, customModels, selectedModel);
+  if (!normalizedQuery) {
+    return options;
+  }
+
+  return options.filter((option) => {
+    const searchSlug = option.slug.toLowerCase();
+    const searchName = option.name.toLowerCase();
+    return searchSlug.includes(normalizedQuery) || searchName.includes(normalizedQuery);
+  });
+}
+
+function normalizeAppSettings(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
+  };
+}
+
 export function useAppSettings() {
-  const [settings, setSettings] = useLocalStorage(
+  const [storedSettings, setSettings] = useLocalStorage(
     APP_SETTINGS_STORAGE_KEY,
     DEFAULT_APP_SETTINGS,
     AppSettingsSchema,
   );
+  const settings = normalizeAppSettings(storedSettings);
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
-      setSettings((prev) => ({
-        ...prev,
-        ...patch,
-      }));
+      setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
     },
     [setSettings],
   );

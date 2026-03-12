@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
+import { resolveTerminalFontFamily, useAppSettings } from "../appSettings";
 import { openInPreferredEditor } from "../editorPreferences";
 import {
   extractTerminalLinks,
@@ -107,6 +108,29 @@ function terminalThemeFromApp(): ITheme {
   };
 }
 
+function fitTerminalAndResize(
+  threadId: ThreadId,
+  terminalId: string,
+  terminal: Terminal,
+  fitAddon: FitAddon,
+): void {
+  const api = readNativeApi();
+  if (!api) return;
+  const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
+  fitAddon.fit();
+  if (wasAtBottom) {
+    terminal.scrollToBottom();
+  }
+  void api.terminal
+    .resize({
+      threadId,
+      terminalId,
+      cols: terminal.cols,
+      rows: terminal.rows,
+    })
+    .catch(() => undefined);
+}
+
 interface TerminalViewportProps {
   threadId: ThreadId;
   terminalId: string;
@@ -117,6 +141,7 @@ interface TerminalViewportProps {
   autoFocus: boolean;
   resizeEpoch: number;
   drawerHeight: number;
+  terminalFontFamily: string;
 }
 
 function TerminalViewport({
@@ -129,6 +154,7 @@ function TerminalViewport({
   autoFocus,
   resizeEpoch,
   drawerHeight,
+  terminalFontFamily,
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -152,7 +178,7 @@ function TerminalViewport({
       lineHeight: 1.2,
       fontSize: 12,
       scrollback: 5_000,
-      fontFamily: '"SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+      fontFamily: terminalFontFamily,
       theme: terminalThemeFromApp(),
     });
     terminal.loadAddon(fitAddon);
@@ -361,20 +387,7 @@ function TerminalViewport({
       const activeTerminal = terminalRef.current;
       const activeFitAddon = fitAddonRef.current;
       if (!activeTerminal || !activeFitAddon) return;
-      const wasAtBottom =
-        activeTerminal.buffer.active.viewportY >= activeTerminal.buffer.active.baseY;
-      activeFitAddon.fit();
-      if (wasAtBottom) {
-        activeTerminal.scrollToBottom();
-      }
-      void api.terminal
-        .resize({
-          threadId,
-          terminalId,
-          cols: activeTerminal.cols,
-          rows: activeTerminal.rows,
-        })
-        .catch(() => undefined);
+      fitTerminalAndResize(threadId, terminalId, activeTerminal, activeFitAddon);
     }, 30);
     void openTerminal();
 
@@ -395,6 +408,19 @@ function TerminalViewport({
   }, [cwd, runtimeEnv, terminalId, threadId]);
 
   useEffect(() => {
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon) return;
+    terminal.options.fontFamily = terminalFontFamily;
+    const frame = window.requestAnimationFrame(() => {
+      fitTerminalAndResize(threadId, terminalId, terminal, fitAddon);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [terminalFontFamily, terminalId, threadId]);
+
+  useEffect(() => {
     if (!autoFocus) return;
     const terminal = terminalRef.current;
     if (!terminal) return;
@@ -407,24 +433,11 @@ function TerminalViewport({
   }, [autoFocus, focusRequestId]);
 
   useEffect(() => {
-    const api = readNativeApi();
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
-    if (!api || !terminal || !fitAddon) return;
-    const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
+    if (!terminal || !fitAddon) return;
     const frame = window.requestAnimationFrame(() => {
-      fitAddon.fit();
-      if (wasAtBottom) {
-        terminal.scrollToBottom();
-      }
-      void api.terminal
-        .resize({
-          threadId,
-          terminalId,
-          cols: terminal.cols,
-          rows: terminal.rows,
-        })
-        .catch(() => undefined);
+      fitTerminalAndResize(threadId, terminalId, terminal, fitAddon);
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -501,6 +514,7 @@ export default function ThreadTerminalDrawer({
   onCloseTerminal,
   onHeightChange,
 }: ThreadTerminalDrawerProps) {
+  const { settings } = useAppSettings();
   const [drawerHeight, setDrawerHeight] = useState(() => clampDrawerHeight(height));
   const [resizeEpoch, setResizeEpoch] = useState(0);
   const drawerHeightRef = useRef(drawerHeight);
@@ -613,6 +627,7 @@ export default function ThreadTerminalDrawer({
       ),
     [normalizedTerminalIds],
   );
+  const terminalFontFamily = resolveTerminalFontFamily(settings.terminalFontFamily);
   const splitTerminalActionLabel = hasReachedSplitLimit
     ? `Split Terminal (max ${MAX_TERMINALS_PER_GROUP} per group)`
     : splitShortcutLabel
@@ -803,6 +818,7 @@ export default function ThreadTerminalDrawer({
                         autoFocus={terminalId === resolvedActiveTerminalId}
                         resizeEpoch={resizeEpoch}
                         drawerHeight={drawerHeight}
+                        terminalFontFamily={terminalFontFamily}
                       />
                     </div>
                   </div>
@@ -821,6 +837,7 @@ export default function ThreadTerminalDrawer({
                   autoFocus
                   resizeEpoch={resizeEpoch}
                   drawerHeight={drawerHeight}
+                  terminalFontFamily={terminalFontFamily}
                 />
               </div>
             )}

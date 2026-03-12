@@ -1,9 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
+import { ZapIcon } from "lucide-react";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
+import {
+  APP_SERVICE_TIER_OPTIONS,
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  MAX_CUSTOM_MODEL_LENGTH,
+  resolveTerminalFontFamily,
+  shouldShowFastTierIcon,
+  useAppSettings,
+} from "../appSettings";
+import { APP_VERSION } from "../branding";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
@@ -11,8 +20,14 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
-import { APP_VERSION } from "../branding";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
@@ -96,6 +111,9 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const codexServiceTier = settings.codexServiceTier;
+  const terminalFontFamily = settings.terminalFontFamily;
+  const resolvedTerminalFontFamily = resolveTerminalFontFamily(terminalFontFamily);
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
 
@@ -247,6 +265,43 @@ function SettingsRouteView() {
               <p className="mt-4 text-xs text-muted-foreground">
                 Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
               </p>
+
+              <div className="mt-5 border-t border-border pt-4">
+                <label htmlFor="terminal-font-family" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Terminal font family</span>
+                  <Input
+                    id="terminal-font-family"
+                    value={terminalFontFamily}
+                    onChange={(event) => updateSettings({ terminalFontFamily: event.target.value })}
+                    placeholder={DEFAULT_TERMINAL_FONT_FAMILY}
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Use any CSS <code>font-family</code> stack. Leave blank to use the built-in
+                    default.
+                  </span>
+                </label>
+
+                <div className="mt-3 flex flex-col gap-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <span>Active terminal font</span>
+                    <div className="mt-1 break-all font-mono text-[11px] text-foreground">
+                      {resolvedTerminalFontFamily}
+                    </div>
+                  </div>
+                  {terminalFontFamily !== defaults.terminalFontFamily ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        updateSettings({ terminalFontFamily: defaults.terminalFontFamily })
+                      }
+                    >
+                      Restore default
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">
@@ -320,6 +375,43 @@ function SettingsRouteView() {
               </div>
 
               <div className="space-y-5">
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Default service tier</span>
+                  <Select
+                    items={APP_SERVICE_TIER_OPTIONS.map((option) => ({
+                      label: option.label,
+                      value: option.value,
+                    }))}
+                    value={codexServiceTier}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      updateSettings({ codexServiceTier: value });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {APP_SERVICE_TIER_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          <div className="flex min-w-0 items-center gap-2">
+                            {option.value === "fast" ? (
+                              <ZapIcon className="size-3.5 text-amber-500" />
+                            ) : (
+                              <span className="size-3.5 shrink-0" aria-hidden="true" />
+                            )}
+                            <span className="truncate">{option.label}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {APP_SERVICE_TIER_OPTIONS.find((option) => option.value === codexServiceTier)
+                      ?.description ?? "Use Codex defaults without forcing a service tier."}
+                  </span>
+                </label>
+
                 {MODEL_PROVIDER_SETTINGS.map((providerSettings) => {
                   const provider = providerSettings.provider;
                   const customModels = getCustomModelsForProvider(settings, provider);
@@ -417,9 +509,15 @@ function SettingsRouteView() {
                                   key={`${provider}:${slug}`}
                                   className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2"
                                 >
-                                  <code className="min-w-0 flex-1 truncate text-xs text-foreground">
-                                    {slug}
-                                  </code>
+                                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                                    {provider === "codex" &&
+                                    shouldShowFastTierIcon(slug, codexServiceTier) ? (
+                                      <ZapIcon className="size-3.5 shrink-0 text-amber-500" />
+                                    ) : null}
+                                    <code className="min-w-0 flex-1 truncate text-xs text-foreground">
+                                      {slug}
+                                    </code>
+                                  </div>
                                   <Button
                                     size="xs"
                                     variant="ghost"
@@ -564,6 +662,7 @@ function SettingsRouteView() {
                 </div>
               ) : null}
             </section>
+
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">About</h2>
